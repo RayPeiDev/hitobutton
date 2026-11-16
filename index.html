@@ -476,6 +476,7 @@ body{
   // 設定の「音」スイッチ。オフのときは AudioContext を作らない・使わないので、ほかのアプリの音楽などを止めない。
   var SOUND_OFF_KEY="button_sound_off";
   var soundOn=true;try{if(localStorage.getItem(SOUND_OFF_KEY)==="1")soundOn=false}catch(e){}
+  var verified=false; // ユーザー操作（指を離した瞬間）の中で作ったContextかどうか。操作の外（読み込み時・復帰時）に作ったものは、running表示でも無音のことがある
   var stale=false; // true のあいだは、次に指を離したとき（ユーザー操作の中）に、音の仕組みを作り直す
   var samples={};
   function loadSamples(){
@@ -494,7 +495,7 @@ body{
     if(!ctx){
       var AC=window.AudioContext||window.webkitAudioContext;
       if(!AC)return null;
-      ctx=new AC();
+      ctx=new AC();verified=false;
       // iPhoneの消音モード(サイドスイッチ)でもスピーカーから鳴らす（iOS 17以降。非対応の端末では何も起きない）
       try{if("audioSession" in navigator)navigator.audioSession.type="playback"}catch(e){}
       var len=Math.floor(ctx.sampleRate*0.2);
@@ -698,15 +699,18 @@ body{
   // 押した瞬間(pointerdown)に作った新しいContextは無音のままだった。
   // → 作り直さずに resume を試し、ダメなら指を離したとき(ユーザー操作の中)に作り直す。
   function silentPing(c){try{var b=c.createBuffer(1,1,22050),n=c.createBufferSource();n.buffer=b;n.connect(c.destination);n.start(0)}catch(e){}}
-  function unlockAudio(){
+  function unlockAudio(ev){
     if(!soundOn)return;
+    var gesture=!!ev&&ev.type!=="visibilitychange"&&ev.type!=="pageshow";
+    // 通知から開いた直後など、操作の外で作ったContextは無音のままのことがある。最初に指を離したとき（操作の中）に作り直す。
+    if(gesture&&ctx&&!verified)stale=true;
     // 別アプリから戻った直後は、状態が「running」と出ていても無音のことがある。
     // iOSは「指を離した操作の中」で作ったContextしか鳴らせないので、その中で、古いものを閉じて作り直す。
-    if(stale&&ctx){var old=ctx;ctx=null;stale=false;try{old.close()}catch(e){}}
+    if(stale&&ctx){var old=ctx;ctx=null;stale=false;if(hum){try{hum.nodes.forEach(function(o){try{o.stop()}catch(e){}})}catch(e){}hum=null}try{old.close()}catch(e){}}
     if(!ctx||ctx.state==="closed"){
       if(document.hidden===false){
         var c0=audio();
-        if(c0){silentPing(c0);setTimeout(function(){if(ctx===c0&&c0.state!=="running")stale=true},700)}
+        if(c0){verified=gesture;silentPing(c0);setTimeout(function(){if(ctx===c0&&c0.state!=="running")stale=true},700)}
       }
       return;
     }
