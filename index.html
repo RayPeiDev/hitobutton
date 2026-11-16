@@ -297,7 +297,7 @@ body{
 .chart .t{fill:#5fe48a;font:600 8px ui-monospace,Menlo,Consolas,monospace;opacity:.6}
 .chart .l{stroke:rgba(94,228,138,.17);stroke-width:.6}
 .chart .now{stroke:#b8ffd0;stroke-width:.7;opacity:.85} /* 今の時刻を表す縦線 */
-.note{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 58px);transform:translateX(-50%);max-width:min(88vw,360px);padding:8px 14px;border-radius:10px;background:rgba(30,30,30,.82);color:#fff;font:13px/1.5 system-ui,sans-serif;text-align:center;opacity:0;pointer-events:none;transition:opacity .25s;z-index:6}
+.note{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 58px);transform:translateX(-50%);max-width:min(88vw,360px);padding:8px 14px;border-radius:10px;background:rgba(30,30,30,.82);color:#fff;font:13px/1.5 system-ui,sans-serif;text-align:center;white-space:pre-line;opacity:0;pointer-events:none;transition:opacity .25s;z-index:6}
 .note.on{opacity:1}
 .settings{position:fixed;left:0;right:0;top:0;z-index:5;display:flex;justify-content:center;padding:calc(env(safe-area-inset-top,0px) + 12px) 12px 0;pointer-events:none;font-family:system-ui,-apple-system,"Hiragino Sans",sans-serif}
 .settings[hidden]{display:none}
@@ -1088,8 +1088,16 @@ body{
     clearTimeout(mdLatchT);
     if(mdLatched){mdLatched=false;playMd("up")}
   }
+  var mdConfirmUntil=0; // ペア成立中に1回押したあと、この時刻までにもう一度押すと解除する
   function mdRelease(){ // 押し込まれていたボタンが、ポンッと跳ね返る
     if(modeBusy)return;
+    // ペアが成立しているときは、1回押しただけでは解除しない。確認を出し、そのあいだにもう一度押したら解除する。
+    if(pairState==="paired"&&Date.now()>mdConfirmUntil){
+      mdConfirmUntil=Date.now()+3500;
+      say("モードを切り替える：\n現在のペアが解除されます");
+      return;
+    }
+    mdConfirmUntil=0;
     mdLatched=true;mdPopSound();leavePair();
   }
   md.addEventListener("pointerdown",function(e){
