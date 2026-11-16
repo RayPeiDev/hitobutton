@@ -1189,7 +1189,7 @@ body{
     if(t.length>30){say("テーマは30文字までです");return}
     if(!db){say("通信できません");return}
     var last=0;try{last=+localStorage.getItem(SUBMIT_KEY)||0}catch(e){}
-    if(Date.now()-last<60000){say("少し待ってからもう一度応募してください");return}
+    if(Date.now()-last<10000){say("少し待ってからもう一度応募してください");return}
     themeSend.disabled=true;
     ensureAuth().then(function(u){
       return db.ref((subKind==="pair"?"pairThemeSubmissions/":"themeSubmissions/")+u.uid+"_"+Date.now()).set({uid:u.uid,text:t,status:"pending",at:TS});
