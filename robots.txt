@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://raypeidev.github.io/sitemap.xml
