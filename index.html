@@ -1765,17 +1765,22 @@ body{
   }
   function pairInfoNow(){return(pairInfo&&pairInfo.pid===pairPid&&pairInfo.day===themeKey(0))?pairInfo:null}
   // 「だれかと」でペアが決まっているあいだは、古びたボタンで、今日のチャレンジと、このペアの達成数を映す（待機中は「みんなで」と同じ今日のテーマ）
-  function pairScreen(){
-    var pi=pairInfoNow();
-    if(!pi){renderTheme(null,themeKey(0));return}
-    renderTheme(pi.theme||"今日のチャレンジはありません",themeKey(0),false,"PAIR THEME",undefined,{l:pi.theme?(pi.today?"今日：達成！":"今日：まだ"):"",r:"達成 "+pi.ach+"回"});
+  // again=true は、読み直したあとの描き直し。表示する中身が今と同じなら描き直さない（描き直すと、流れる文字が頭から始まり直して、ちらつく）
+  function pairScreen(again){
+    var pi=pairInfoNow(),tk=themeKey(0);
+    if(!pi){renderTheme(null,tk);chartEl._tsig=null;return}
+    var text=pi.theme||"今日のチャレンジはありません",foot={l:pi.theme?(pi.today?"今日：達成！":"今日：まだ"):"",r:"達成 "+pi.ach+"回"};
+    var sig=[text,tk,foot.l,foot.r].join("\u0001");
+    if(again&&chartEl._tsig===sig&&chartEl.querySelector(".mq"))return;
+    renderTheme(text,tk,false,"PAIR THEME",undefined,foot);
+    chartEl._tsig=sig;
   }
   function showTheme(){
     themeOn=true;var key=themeKey(0);
     if(mode==="pair"&&pairState==="paired"){ // 待機中は「みんなで」と同じ（今日のテーマ）
       pairScreen();lightOn("theme");
       loadPresses().then(function(){ // 今日のチャレンジと達成数を読み直す。まだ同じ画面を出していれば、映し直す
-        if(themeOn&&screenMode==="theme"&&mode==="pair"&&pairState==="paired")pairScreen();
+        if(themeOn&&screenMode==="theme"&&mode==="pair"&&pairState==="paired")pairScreen(true);
       });
       return;
     }
