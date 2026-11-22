@@ -8,6 +8,16 @@ self.addEventListener("push", (e) => {
   let data = {};
   try { data = e.data ? e.data.json() : {}; }
   catch (_) { data = { body: e.data ? e.data.text() : "" }; }
+  // 毎朝のお知らせ（tag が "daily"）は、サーバーが送った本文（今日のテーマ／チャレンジ）をそのまま出す。
+  // ボタンの通知とは別の tag にして、お互いを上書きしない。アプリを見ている最中でも消さない。
+  if (data.tag === "daily" && typeof data.body === "string" && data.body) {
+    e.waitUntil(self.registration.showNotification("HitoButton", {
+      body: data.body.slice(0, 200),
+      tag: "daily",
+      icon: "button-icon-192.png",
+    }));
+    return;
+  }
   const tag = "button";
   e.waitUntil((async () => {
     await self.registration.showNotification("HitoButton", {
