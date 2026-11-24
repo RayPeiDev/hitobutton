@@ -783,7 +783,7 @@ body{
       var back=adm?false:giveBackLed(day,kind);
       if(res.limited)say("今日は、この回線からの上限に達しました",true);
       else if(res.busy)say("少し待ってからもう一度押してください",true);
-      else say(back?"記録できませんでした。もう一度押せます":"記録できませんでした",true);
+      else{var w=res.why?"（"+res.why+"）":"";say(back?"記録できませんでした"+w+"。もう一度押せます":"記録できませんでした"+w,true)}
     });
   }
 
@@ -1024,6 +1024,12 @@ body{
     md.setAttribute("aria-pressed",mode==="pair"?"true":"false");
     md.setAttribute("aria-label",mode==="pair"?(pairState==="paired"?"だれかと（相手が決まっています）":"だれかと（相手を探しています）"):"みんなで");
   }
+  function withTimeout(p,ms,tag){ // 返事が来ないまま止まらないように、ms たったら失敗として返す
+    return new Promise(function(res,rej){
+      var t=setTimeout(function(){rej({code:tag})},ms);
+      Promise.resolve(p).then(function(v){clearTimeout(t);res(v)},function(e){clearTimeout(t);rej(e)});
+    });
+  }
   function pairCall(path,extra){
     var p={deviceId:deviceId()};if(extra)for(var k in extra)p[k]=extra[k];
     return pushPost(path,p).then(function(r){if(!r.ok){var e=new Error("pair "+r.status);e.status=r.status;throw e}return r.json()});
@@ -1037,15 +1043,17 @@ body{
     var needTok=(path==="/pair/notify"||path==="/pair/crowd"||path==="/pair/daily"||pc);
     var wantAC=(path==="/pair/notify"||path==="/pair/daily"||pc);
     if(!auth||(!needTok&&!(isAdmin&&auth.currentUser)))return pairCall(path,extra);
-    return (auth.currentUser?Promise.resolve(auth.currentUser):ensureAuth()).then(function(u){return u.getIdToken()}).then(function(t){return t},function(){return null}).then(function(t){
+    var aerr=""; // ログインの証明が取れなかった理由（失敗の表示用）
+    function go(x){return pairCall(path,x).catch(function(e){if(aerr&&e&&typeof e==="object")e.authErr=aerr;throw e})}
+    return withTimeout((auth.currentUser?Promise.resolve(auth.currentUser):ensureAuth()).then(function(u){return u.getIdToken()}),15000,"timeout").then(function(t){return t},function(e){aerr=(e&&(e.code||e.name))||"fail";return null}).then(function(t){
       var x={};if(extra)for(var k in extra)x[k]=extra[k];
-      if(t){x.idToken=t;if(isAdmin)x.wantAdmin=true}
-      if(!(t&&(isAdmin||wantAC)))return pairCall(path,x);
+      if(t){x.idToken=t;if(isAdmin)x.wantAdmin=true}else if(!aerr)aerr="notoken";
+      if(!(t&&(isAdmin||wantAC)))return go(x);
       // 管理者・ペアのチャレンジのときは、Worker が Realtime Database を読むために、App Check のトークンも渡す
       var ac=null;try{ac=firebase.appCheck().getToken()}catch(e){}
       return Promise.resolve(ac).then(function(r){return r&&r.token},function(){return null}).then(function(at){
         if(at)x.appCheckToken=at;
-        return pairCall(path,x);
+        return go(x);
       });
     });
   }
@@ -1502,6 +1510,12 @@ body{
   //  ・記録も通知も Worker（/pair/notify または /pair/crowd）が行う。1日の回数・IPごとの上限・管理者の確認も Worker が決める。
   //  ・Worker が「今日はもう上限」と答えたら limited。回線のつながり具合などで失敗したときは ok=false（LEDを戻す）。
   //  ・画面には、返事が来るまで自分の分を「未確定」として足しておく（unacked）。
+  function whyErr(e){ // 「記録できませんでした」の後ろに出す、失敗の理由
+    var a=e&&e.authErr,st=e&&e.status;
+    if(a)return "auth:"+a+(st?"/"+st:"");
+    if(st)return "http:"+st;
+    return "net:"+((e&&e.name)||"error");
+  }
   function announce(){
     var paired=(mode==="pair"&&pairState==="paired");
     var dk=themeKey(0),src=graphSrc(),now=Date.now()+serverOff;
@@ -1525,10 +1539,10 @@ body{
       if(paired&&r&&r.state)applyPair(r,false); // 相手がいなくなっていたら、ここで状態が変わる
       var ok=paired?!!(r&&r.recorded):!!(r&&r.ok);
       settle(ok);
-      return {ok:ok,limited:!!(r&&r.limited),reason:(r&&r.reason)||null,busy:false};
+      return {ok:ok,limited:!!(r&&r.limited),reason:(r&&r.reason)||null,busy:false,why:ok?"":((r&&r.reason)||(paired?(r&&r.state?"state:"+r.state:"noresp"):"ng"))};
     }).catch(function(e){
       dbg("押した記録の送信",e);settle(false);
-      return {ok:false,limited:false,reason:null,busy:!!(e&&e.status===429)};
+      return {ok:false,limited:false,reason:null,busy:!!(e&&e.status===429),why:whyErr(e)};
     });
   }
   function clearNotes(){
