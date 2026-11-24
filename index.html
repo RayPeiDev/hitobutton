@@ -882,6 +882,25 @@ body{
   function dbg(where,e){try{console.warn("[button] "+where+"に失敗:",(e&&e.code)||"",(e&&e.message)||e)}catch(x){}}
   try{firebase.initializeApp(firebaseConfig);try{firebase.appCheck().activate(new firebase.appCheck.ReCaptchaEnterpriseProvider("6Lcq6BguAAAAAE8U8Py4Antjgb8SO4OZ44tyocmf"),true)}catch(e){dbg("App Check",e)}auth=firebase.auth();db=firebase.database();TS=firebase.database.ServerValue.TIMESTAMP}catch(e){}
 
+  // ===== Firebase（Realtime Database）の接続は、使うときだけつなぐ =====
+  // つなぎっぱなしだと、アプリを開いている人の数だけ同時接続を使う（無料枠は100まで）。
+  // 時刻のずれが取れたら切って、読み書きのときだけつなぎ直す。管理者は審査画面の監視があるので、つないだままにする。
+  var dbUsers=0,dbSleepT=0;
+  function dbSleep(){
+    clearTimeout(dbSleepT);dbSleepT=0;
+    if(!db||dbUsers>0||(typeof isAdmin!=="undefined"&&isAdmin))return;
+    try{db.goOffline()}catch(e){}
+  }
+  function dbSleepLater(ms){clearTimeout(dbSleepT);dbSleepT=setTimeout(dbSleep,ms)}
+  function dbWake(){if(!db)return;clearTimeout(dbSleepT);dbSleepT=0;try{db.goOnline()}catch(e){}}
+  function dbWith(fn){ // fn は Realtime Database の読み書き（Promise を返す）。終わって少し待ったら切る
+    if(!db)return Promise.reject(new Error("no firebase"));
+    dbUsers++;dbWake();
+    var done=function(){dbUsers=Math.max(0,dbUsers-1);if(!dbUsers)dbSleepLater(5000)};
+    var p;try{p=Promise.resolve(fn())}catch(e){done();return Promise.reject(e)}
+    return p.then(function(r){done();return r},function(e){done();throw e});
+  }
+
   function deviceId(){
     try{
       var id=localStorage.getItem(DEVICE_ID_KEY);
@@ -1039,8 +1058,10 @@ body{
     if(pairState==="paired"&&(was!=="paired"||wasPid!==pairPid))say(was==="paired"?"新しい相手が決まりました":"相手が決まりました");
     else if(pairState==="waiting"&&was==="paired")say("相手がいなくなりました。新しい相手を探しています");
   }
+  var pairPollAt=0;
   function pollPair(quiet){
     if(mode!=="pair")return Promise.resolve();
+    pairPollAt=Date.now();
     return pairCall("/pair/status").then(function(r){
       if(mode!=="pair")return;
       if(r.state==="none"){ // サーバー側の記録が消えていたら入り直す
@@ -1049,7 +1070,7 @@ body{
       applyPair(r,quiet);
     }).catch(function(e){dbg("ペアの確認",e)});
   }
-  function startPoll(){clearInterval(pairTimer);pairTimer=setInterval(function(){if(!document.hidden)pollPair(false)},30000)}
+  function startPoll(){clearInterval(pairTimer);pairTimer=setInterval(function(){if(document.hidden)return;if(pairState==="paired"&&Date.now()-pairPollAt<110000)return;pollPair(false)},30000)}
   function stopPoll(){clearInterval(pairTimer);pairTimer=0}
   document.addEventListener("visibilitychange",function(){if(!document.hidden&&mode==="pair")pollPair(false).then(function(){if(mode==="pair"&&pairState==="paired")loadPresses()})});
 
@@ -1254,7 +1275,7 @@ body{
     if(Date.now()-last<60000){say("少し待ってからもう一度応募してください");return}
     themeSend.disabled=true;
     ensureAuth().then(function(u){
-      return db.ref((subKind==="pair"?"pairThemeSubmissions/":"themeSubmissions/")+u.uid+"_"+Date.now()).set({uid:u.uid,text:t,status:"pending",at:TS});
+      return dbWith(function(){return db.ref((subKind==="pair"?"pairThemeSubmissions/":"themeSubmissions/")+u.uid+"_"+Date.now()).set({uid:u.uid,text:t,status:"pending",at:TS})});
     }).then(function(){
       try{localStorage.setItem(SUBMIT_KEY,String(Date.now()))}catch(e){}
       themeIn.value="";say("応募しました。管理人が確認します");
@@ -1292,13 +1313,13 @@ body{
     gateEl.hidden=false;try{adminPass.focus()}catch(e){}
   }
   function setAdmin(v){
-    isAdmin=v;adminBox.hidden=!v;
+    isAdmin=v;adminBox.hidden=!v;if(v)dbWake();else dbSleepLater(5000);
     if(!v){themeAdmin.hidden=true;themeAdmin.textContent="";adminKind=""}
     if(v){gateEl.hidden=true;watchSubs()}else unwatchSubs();
   }
   function checkAdmin(){
     if(!db)return;
-    ensureAuth().then(function(u){return db.ref("admins/"+u.uid).once("value")})
+    ensureAuth().then(function(u){return dbWith(function(){return db.ref("admins/"+u.uid).once("value")})})
       .then(function(sn){setAdmin(sn.val()===true)}).catch(function(e){if(e&&e.code==="PERMISSION_DENIED"){setAdmin(false);return}dbg("管理者の確認",e)});
   }
 
@@ -1307,7 +1328,7 @@ body{
   function adminLogin(){
     var pw=adminPass.value;if(!pw||!db)return;
     if(Date.now()<lockUntil){say("しばらく待ってからやり直してください");return}
-    adminGo.disabled=true;
+    adminGo.disabled=true;dbWake();
     ensureAuth().then(function(u){
       return db.ref("adminLogin/"+u.uid).set(pw)
         .then(function(){return db.ref("admins/"+u.uid).set(true)})
@@ -1320,7 +1341,7 @@ body{
         if(++loginFails>=5){lockUntil=Date.now()+60000;loginFails=0}
         say("認証できませんでした");
       }else say("通信できませんでした");
-    }).then(function(){adminGo.disabled=false});
+    }).then(function(){adminGo.disabled=false;dbSleepLater(8000)});
   }
   adminGo.addEventListener("click",adminLogin);
   adminPass.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.isComposing){e.preventDefault();adminLogin()}});
@@ -1493,7 +1514,7 @@ body{
       if(!ok)mineAdd(dk,src,b,-1); // 記録できなかった分は、自分の点からも外す
       if(countsDay!==dk||countsSrc!==src)return;
       if(!ok){unacked[b]=Math.max(0,(unacked[b]||0)-1);if(!unacked[b])delete unackedBase[b];return}
-      loadPresses().then(function(loaded){
+      loadPresses(true).then(function(loaded){
         if(countsDay!==dk||countsSrc!==src)return;
         unacked[b]=Math.max(0,(unacked[b]||0)-1);if(!unacked[b])delete unackedBase[b];
         if(!loaded)counts[b]=(counts[b]||0)+1;
@@ -1518,7 +1539,7 @@ body{
   // ===== 白いボタンを押している間だけ出る、24時間グラフ =====
   // 横軸＝過去24時間（右端が現在）。赤ボタンが押された時刻に点を打つ。縦位置はランダムだが、できるだけ重ならないよう選ぶ。
   var serverOff=0,chartEl=document.getElementById("chart"),chartOn=false,loadingN=0,counts={},unacked={},unackedBase={},countsDay="",BUCKET=300000,MAXDOTS=30; // counts: 今日の5分ごとの押された回数 {区間番号:回数} / unacked: 書き込みの返事待ちの自分の分 // loadingN: グラフ用のデータを読み込み中の数（0より大きい間は LOADING… を出す）
-  if(db){try{db.ref(".info/serverTimeOffset").on("value",function(sn){serverOff=sn.val()||0})}catch(e){}}
+  if(db){try{db.ref(".info/serverTimeOffset").on("value",function(sn){serverOff=sn.val()||0});var firstConn=true;db.ref(".info/connected").on("value",function(sn){if(sn.val()===true&&firstConn){firstConn=false;dbSleepLater(2500)}})}catch(e){}}
   function pad3(n){return("00"+n).slice(-3)}
   function jstDayStart(now){return Math.floor((now+32400000)/86400000)*86400000-32400000} // 日本時間のその日の0時（ミリ秒）
   // グラフの点の出どころ。「だれかと」でペアが決まっている間は、その2人組だけの記録。それ以外は全員の記録（みんなで）。
@@ -1527,7 +1548,16 @@ body{
   function pairKey(){if(pairPid===null||pairPid===undefined)return null;var k=String(pairPid).replace(/[.$#\[\]\/]/g,"_").slice(0,64);return k||null}
   function graphSrc(){return(mode==="pair"&&pairState==="paired")?"pair:"+(pairKey()||""):"crowd"}
   // 今日の分（5分ごとの押された回数）を Worker から読む。1日あたり最大288件の小さな数字なので軽い。
-  function loadPresses(){
+  // 白いボタンの連打などで、2秒以内に何度も読みに行かない（前の読み込みの結果を使う）。記録した直後や定期の読み直しは force=true で、必ず読み直す。
+  var lpAt=0,lpKey="",lpP=null,LP_CACHE_MS=2000;
+  function loadPresses(force){
+    var key=((mode==="pair"&&pairState==="paired")?"p":"c")+"|"+themeKey(0)+"|"+graphSrc();
+    if(!force&&lpP&&key===lpKey&&Date.now()-lpAt<LP_CACHE_MS)return lpP;
+    var p=loadPressesRaw();lpKey=key;lpAt=Date.now();lpP=p;
+    p.then(function(ok){if(!ok&&lpP===p)lpP=null});
+    return p;
+  }
+  function loadPressesRaw(){
     var dk=themeKey(0),src=graphSrc(),paired=(mode==="pair"&&pairState==="paired");
     return (paired?pairCallAdmin:pairCall)("/pair/counts",{scope:paired?"pair":"crowd"}).then(function(r){
       var c={},bb=(r&&r.b)||{};
@@ -1675,7 +1705,7 @@ body{
       if(Date.now()-chartPollAt>CHART_POLL_MAX||chartPollFail>=3){chartPollOff();return}
       if(document.hidden||chartPollBusy)return;
       chartPollBusy=true;var before=JSON.stringify(counts);
-      loadPresses().then(function(ok){
+      loadPresses(true).then(function(ok){
         chartPollBusy=false;chartPollFail=ok?0:chartPollFail+1;
         if(ok&&chartOn&&screenMode==="chart"&&JSON.stringify(counts)!==before)renderChart();
       });
@@ -1727,7 +1757,7 @@ body{
   function fetchThemeList(path){ // path：省略すると themes（みんなで）。pairThemes（だれかと）も同じ形で読める（rule は達成の条件）
     var def={list:[],ok:false};
     if(!db)return Promise.resolve(def);
-    return ensureAuth().then(function(){return db.ref(path||"themes").once("value")}).then(function(sn){
+    return ensureAuth().then(function(){return dbWith(function(){return db.ref(path||"themes").once("value")})}).then(function(sn){
       var list=[];
       sn.forEach(function(c){
         var v=c.val(),text=null,at=0,aa=0,rm=0,rule=null;
@@ -1858,7 +1888,7 @@ body{
     themeOn=true;var key=themeKey(0);
     if(mode==="pair"&&pairState==="paired"){ // 待機中は「みんなで」と同じ（今日のテーマ）
       pairScreen();lightOn("theme");
-      loadPresses().then(function(){ // 今日のチャレンジと達成数を読み直す。まだ同じ画面を出していれば、映し直す
+      loadPresses(true).then(function(){ // 今日のチャレンジと達成数を読み直す。まだ同じ画面を出していれば、映し直す
         if(themeOn&&screenMode==="theme"&&mode==="pair"&&pairState==="paired")pairScreen(true);
       });
       return;
